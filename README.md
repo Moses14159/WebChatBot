@@ -1,0 +1,3 @@
+# Introduction
+这是一个基于llm的聊天机器人，后续陆续添加上传本地文件的RAG操作。
+在init的apikey填入自己的apikey（推荐豆包火山引擎）
