@@ -15,6 +15,7 @@ from langchain_core.runnables import RunnableWithMessageHistory, RunnablePassthr
 
 from src.utils import init_qa,init_llm
 from src.utils.conversation import Conversation, Role
+from src.utils.retrival import init_vectorstore, process_uploaded_files, create_rag_chain, is_rag_enabled
 
 from langchain_community.chat_message_histories import (
     StreamlitChatMessageHistory,
@@ -62,33 +63,72 @@ chain_with_history = RunnableWithMessageHistory(
         )
 
 ##界面初始化
-    #两种界面呈现模式，即“wide”和“centered”。wide模式可以将页面撑满
+    #两种界面呈现模式，即"wide"和"centered"。wide模式可以将页面撑满
 st.set_page_config(layout="centered")
 # st.title("问答机器人")
 # # 初始化QA链
 # init_qa()
+
+# 初始化向量存储
+init_vectorstore()
 
 #边栏
 with st.sidebar:
     st.title("Moses系统")
     st.write("这是一个使用 Streamlit 构建的简单聊天应用程序。")
     st.write("你可以提问并得到相对智能的回复。")
-    # ....
-    st.checkbox("With memory", key="with_history",
-                help="This will let the agent being able to remember the conversation history.")
+    
+    # 记忆设置
+    st.subheader("记忆设置")
+    st.checkbox("启用记忆", key="with_history",
+                help="启用后，AI将能够记住对话历史。")
     ### History length slider
-    his_len = st.slider("History length", min_value=1, max_value=10, step=1, key="history_length",
+    his_len = st.slider("历史记忆长度", min_value=1, max_value=10, step=1, key="history_length",
               disabled=not st.session_state.get("with_history", False))
     ### Memory mode, ["All", "Trim", "Summarize", "Trim+Summarize"]
-    memory_mode = st.selectbox("Memory mode", ["All", "Trim", "Summarize", "Trim+Summarize"])
-    ### Memory clear
+    memory_mode = st.selectbox("记忆模式", ["All", "Trim", "Summarize", "Trim+Summarize"])
+    
+    # RAG设置
+    st.subheader("文档检索设置")
+    st.checkbox("启用文档检索", key="use_rag", help="启用后，AI将基于上传的文档回答问题。")
+    
+    # 文件上传
+    uploaded_files = st.file_uploader(
+        "上传文档", 
+        accept_multiple_files=True,
+        type=["pdf", "txt", "docx", "csv"],
+        disabled=not st.session_state.get("use_rag", False),
+        help="支持PDF、TXT、DOCX和CSV格式的文件。"
+    )
+    
+    # 文档分块设置
+    if st.session_state.get("use_rag", False):
+        st.subheader("文档分块设置")
+        chunk_size = st.slider("分块大小", min_value=500, max_value=2000, value=1000, step=100)
+        chunk_overlap = st.slider("分块重叠", min_value=0, max_value=500, value=100, step=50)
+        
+        # 处理上传的文件
+        if uploaded_files:
+            process_button = st.button("处理文档", use_container_width=True)
+            if process_button:
+                with st.spinner("正在处理文档..."):
+                    vectorstore = process_uploaded_files(uploaded_files, chunk_size, chunk_overlap)
+                    if vectorstore:
+                        st.session_state["vectorstore"] = vectorstore
+                        rag_chain, retriever = create_rag_chain(vectorstore, st.session_state["llm"])
+                        st.session_state["rag_chain"] = rag_chain
+                        st.session_state["retriever"] = retriever
+                        st.success(f"成功处理 {len(uploaded_files)} 个文档！")
+                    else:
+                        st.error("文档处理失败，请检查文件格式。")
+    
+    # 历史管理
+    st.subheader("历史管理")
     col1, col2 = st.columns([1, 1])
-    col1.button("Clear history", on_click=lambda: st.session_state["chat_history"].clear(),
+    col1.button("清除历史", on_click=lambda: st.session_state["chat_history"].clear(),
                 use_container_width=True, disabled=not st.session_state.get("with_history", False),
-                help="Clear the conversation history for agent.\n\n But the history for demonstration will be reserved")
-    ### Memory save
-    col3, col4 = st.columns([1, 1])
-    col3.button("Save history", on_click=_history_to_disk, type="secondary", use_container_width=True)
+                help="清除AI的对话历史记忆，但演示用的历史记录会保留。")
+    col2.button("保存历史", on_click=_history_to_disk, type="secondary", use_container_width=True)
 
 #初始化对话历史
 placeholder = st.empty()
@@ -209,11 +249,20 @@ if prompt_text := st.chat_input("Enter your message here (exit to quit)", key="c
     st.chat_message("user").write(prompt_text)
     # st.spinner状态，也是一个容器，但是是预设的容器，显示一段等候动画
     with st.spinner("Thinking..."):
-        # response = st.session_state["bot"].rag_chain.stream(prompt_text)  # 大模型返回结果
-        if st.session_state.get("with_history", False):
-            # As usual, new messages are added to StreamlitChatMessageHistory when the Chain is called.
+        # 检查是否启用RAG
+        if is_rag_enabled() and st.session_state.get("rag_chain"):
+            # 使用RAG链处理问题
+            if st.session_state.get("with_history", False):
+                # 带历史记忆的RAG
+                config = {"configurable": {"session_id": "any"}}
+                response = st.session_state["rag_chain"].stream({"question": prompt_text, "history": msgs.messages}, config)
+            else:
+                # 不带历史记忆的RAG
+                response = st.session_state["rag_chain"].stream({"question": prompt_text, "history": []})
+        elif st.session_state.get("with_history", False):
+            # 普通对话带历史记忆
             config = {"configurable": {"session_id": "any"}}
-
+            
             if memory_mode == 'All':
                 response = chain_with_history.stream({"question": prompt_text},config)
             elif memory_mode == 'Trim+Summarize':
@@ -223,6 +272,7 @@ if prompt_text := st.chat_input("Enter your message here (exit to quit)", key="c
             elif memory_mode == 'Summarize':
                 response = chain_with_regular_summarization.stream({"question": prompt_text},config)
         else:
+            # 普通对话不带历史记忆
             response = st.session_state["llm"].stream(prompt_text)
         content = st.chat_message("assistant").write_stream(response)
 
