@@ -1,0 +1,31 @@
+# Core dependencies
+langchain>=0.0.267
+streamlit>=1.24.0
+python-dotenv>=1.0.0
+
+# LLM providers
+openai>=1.2.0  # OpenAI API
+zhipuai>=1.0.7  # 文心一言API
+langchain-google-genai>=0.0.5  # Google Gemini API
+
+# 以下LLM提供商通过langchain-community支持
+# - DeepSeek
+# - 讯飞星火
+# - 火山引擎
+
+# Vector store and embeddings
+faiss-cpu>=1.7.4
+sentence-transformers>=2.2.2
+
+# RAG components
+chromadb>=0.4.13
+langchain-community>=0.0.10
+langchain-openai>=0.0.2
+
+# Document loaders
+unstructured>=0.10.30  # 用于加载各种格式的文档
+pypdf>=3.15.1  # PDF文档支持
+
+# Utilities
+pydantic>=2.4.2
+tiktoken>=0.5.1
